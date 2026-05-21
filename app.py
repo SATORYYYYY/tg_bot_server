@@ -415,6 +415,9 @@ def initiate_password_reset():
     if not bot_username:
         return jsonify({'error': 'Bot username not available'}), 500
     
+    # Формируем ссылку для открытия бота (всегда)
+    telegram_link = f"https://t.me/{bot_username}?start=reset_{token}"
+    
     # Если chat_id известен - отправляем код сразу
     if chat_id:
         send_telegram_message(
@@ -423,16 +426,15 @@ def initiate_password_reset():
             f"Ваш код для сброса пароля: <code>{code}</code>\n\n"
             f"⏳ Код действителен 10 минут."
         )
-        telegram_link = None  # Не нужна ссылка, код уже отправлен
+        code_sent_directly = True
     else:
-        # Формируем ссылку для открытия бота
-        telegram_link = f"https://t.me/{bot_username}?start=reset_{token}"
+        code_sent_directly = False
     
     return jsonify({
         'success': True,
         'telegram_link': telegram_link,
         'token': token,
-        'code_sent_directly': chat_id is not None,
+        'code_sent_directly': code_sent_directly,
         'expires_in': 600  # 10 минут
     })
 
