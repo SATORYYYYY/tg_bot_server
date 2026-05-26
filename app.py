@@ -50,13 +50,13 @@ def cleanup_expired_tokens():
         del password_reset_tokens[t]
 
 
-def send_telegram_message(chat_id: int, text: str, reply_markup: dict = None) -> dict:
+def send_telegram_message(chat_id: int, text: str, reply_markup: dict = None, parse_mode: str = 'HTML') -> dict:
     """Отправляет сообщение через Telegram Bot API"""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {
         'chat_id': chat_id,
         'text': text,
-        'parse_mode': 'HTML'
+        'parse_mode': parse_mode
     }
     if reply_markup:
         payload['reply_markup'] = reply_markup
@@ -102,13 +102,6 @@ def health():
 
 @app.route('/webhook', methods=['POST'])
 def telegram_webhook():
-    """
-    Принимает webhook от Telegram.
-    Обрабатывает:
-    - Команда /start
-    - Кнопка "Передать контакт" (contact)
-    - Команда /start с токеном для регистрации/восстановления пароля
-    """
     data = request.get_json()
     
     message = data.get('message')
@@ -541,6 +534,68 @@ def check_phone(phone: str):
         'linked': chat_id is not None,
         'chat_id': chat_id if chat_id else None
     })
+
+
+@app.route('/send-broadcast', methods=['POST'])
+def send_broadcast():
+    """
+    API для отправки рассылок.
+    Поддерживает отправку текста и фото с подписью.
+    """
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer ') or auth_header[7:] != API_SECRET:
+        return jsonify({'error': 'Unauthorized'}), 401
+    
+    chat_id = request.form.get('chat_id') or request.json.get('chat_id')
+    text = request.form.get('caption') or request.json.get('text')
+    parse_mode = request.form.get('parse_mode') or request.json.get('parse_mode', 'HTML')
+    
+    if not chat_id:
+        return jsonify({'error': 'chat_id is required'}), 400
+    
+    # Проверяем, есть ли фото в запросе
+    if 'photo' in request.files:
+        photo = request.files['photo']
+        return send_telegram_photo(chat_id, photo, text, parse_mode)
+    
+    # Отправка только текста
+    if not text:
+        return jsonify({'error': 'Text or photo is required'}), 400
+    
+    result = send_telegram_message(chat_id, text, parse_mode=parse_mode)
+    
+    if result['success']:
+        return jsonify({'success': True, 'message': 'Broadcast sent successfully'})
+    else:
+        return jsonify({
+            'error': 'Failed to send broadcast',
+            'details': result.get('error') or result.get('response')
+        }), 500
+
+
+def send_telegram_photo(chat_id: int, photo, caption: str = None, parse_mode: str = 'HTML') -> dict:
+    """Отправляет фото через Telegram Bot API"""
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+    
+    files = {'photo': (photo.filename, photo.stream, photo.content_type)}
+    data = {'chat_id': chat_id}
+    
+    if caption:
+        data['caption'] = caption
+        data['parse_mode'] = parse_mode
+    
+    try:
+        response = requests.post(url, data=data, files=files, timeout=30)
+        return {
+            'success': response.status_code == 200,
+            'status_code': response.status_code,
+            'response': response.json() if response.status_code == 200 else response.text
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e)
+        }
 
 
 def get_bot_username() -> str:
