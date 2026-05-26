@@ -169,7 +169,7 @@ def handle_contact(chat_id: int, contact: dict):
         'expires': datetime.now() + timedelta(minutes=30)
     }
     
-    webapp_url = f"{WEBAPP_URL}/auth/telegram-callback?token={token}&action=register"
+    webapp_url = f"{WEBAPP_URL}?telegram_token={token}&telegram_action=register"
     
     send_telegram_message_with_button(
         chat_id,
