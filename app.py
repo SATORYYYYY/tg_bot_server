@@ -20,6 +20,8 @@ app = Flask(__name__)
 BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8610099496:AAHfZIdVbiRF1exnrMq5N88YxD4T0Tkrefw')
 API_SECRET = os.environ.get('API_SECRET', 'your-secret-key-here')  # Для защиты API
 WEBAPP_URL = os.environ.get('WEBAPP_URL', 'https://your-domain.com')  # URL фронтенда
+DJANGO_API_URL = os.environ.get('DJANGO_API_URL', 'http://localhost:8000/api')  # URL Django API
+DJANGO_API_KEY = os.environ.get('DJANGO_API_KEY', 'your-django-api-key')  # API ключ Django
 
 # Хранилище (в production лучше использовать Redis или БД)
 # Формат: {phone_number: chat_id}
@@ -50,6 +52,18 @@ def cleanup_expired_tokens():
         del password_reset_tokens[t]
 
 
+def sync_chat_id_to_django(phone: str, chat_id: int):
+    """Синхронизирует chat_id с Django базой"""
+    try:
+        url = f"{DJANGO_API_URL}/accounts/sync-chat-id/"
+        headers = {'Authorization': f'Bearer {DJANGO_API_KEY}'}
+        response = requests.post(url, json={'phone': phone, 'chat_id': chat_id}, headers=headers, timeout=5)
+        return response.status_code == 200
+    except Exception as e:
+        print(f"Error syncing chat_id to Django: {e}")
+        return False
+
+
 def send_telegram_message(chat_id: int, text: str, reply_markup: dict = None, parse_mode: str = 'HTML') -> dict:
     """Отправляет сообщение через Telegram Bot API"""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -76,7 +90,6 @@ def send_telegram_message(chat_id: int, text: str, reply_markup: dict = None, pa
 
 
 def send_telegram_message_with_button(chat_id: int, text: str, button_text: str, url: str) -> dict:
-    """Отправляет сообщение с кнопкой-ссылкой"""
     reply_markup = {
         'inline_keyboard': [[{
             'text': button_text,
@@ -108,7 +121,6 @@ def telegram_webhook():
     callback_query = data.get('callback_query')
     
     if callback_query:
-        # Обработка callback кнопок
         return handle_callback_query(callback_query)
     
     if not message:
@@ -121,11 +133,9 @@ def telegram_webhook():
     if not chat_id:
         return jsonify({'ok': True})
     
-    # Обработка контакта (кнопка "Передать контакт")
     if contact:
         return handle_contact(chat_id, contact)
     
-    # Обработка команды /start
     if text.startswith('/start'):
         return handle_start_command(chat_id, text)
     
@@ -133,27 +143,24 @@ def telegram_webhook():
 
 
 def handle_contact(chat_id: int, contact: dict):
-    """Обработка полученного контакта"""
     phone_number = contact.get('phone_number', '')
     first_name = contact.get('first_name', '')
-    
+
     if not phone_number:
         send_telegram_message(
             chat_id,
             "❌ Не удалось получить номер телефона. Попробуйте ещё раз."
         )
         return jsonify({'ok': True})
-    
-    # Нормализуем номер
+
     if phone_number.startswith('8') and len(phone_number) == 11:
         phone_number = '+7' + phone_number[1:]
     elif not phone_number.startswith('+'):
         phone_number = '+' + phone_number
-    
-    # Сохраняем chat_id
+
     chat_ids[phone_number] = chat_id
+    sync_chat_id_to_django(phone_number, chat_id)
     
-    # Генерируем токен для регистрации
     token = generate_token()
     registration_tokens[token] = {
         'phone': phone_number,
@@ -162,7 +169,6 @@ def handle_contact(chat_id: int, contact: dict):
         'expires': datetime.now() + timedelta(minutes=30)
     }
     
-    # Отправляем сообщение с кнопкой для возврата на сайт
     webapp_url = f"{WEBAPP_URL}/auth/telegram-callback?token={token}&action=register"
     
     send_telegram_message_with_button(
@@ -177,16 +183,13 @@ def handle_contact(chat_id: int, contact: dict):
 
 
 def handle_start_command(chat_id: int, text: str):
-    """Обработка команды /start"""
     parts = text.split()
     
     if len(parts) > 1:
-        param = parts[1]  # /start <param>
+        param = parts[1]  
         
-        # Проверяем, это токен регистрации или восстановления пароля
         if param.startswith('reg_'):
-            # Старый формат - оставляем для совместимости
-            phone = param[4:]  # reg_+79991234567
+            phone = param[4:]  
             chat_ids[phone] = chat_id
             send_telegram_message(
                 chat_id,
@@ -194,14 +197,11 @@ def handle_start_command(chat_id: int, text: str):
                 f"Теперь вы можете использовать этот номер для входа на сайт."
             )
         elif param.startswith('reset_'):
-            # Токен сброса пароля
             token = param[6:]
             handle_password_reset_token(chat_id, token)
         else:
-            # Отправляем кнопку для передачи контакта
             send_contact_request_button(chat_id)
     else:
-        # Отправляем кнопку для передачи контакта
         send_contact_request_button(chat_id)
     
     return jsonify({'ok': True})
