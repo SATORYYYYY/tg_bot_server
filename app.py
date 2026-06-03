@@ -623,9 +623,10 @@ def broadcast_to_all():
     data = request.get_json()
     text = data.get('text', '')
     parse_mode = data.get('parse_mode', 'HTML')
+    image_url = data.get('image_url')  # URL изображения для отправки
     
-    if not text:
-        return jsonify({'error': 'Text is required'}), 400
+    if not text and not image_url:
+        return jsonify({'error': 'Text or image is required'}), 400
     
     if not all_bot_users:
         return jsonify({'error': 'No users found'}), 404
@@ -634,7 +635,13 @@ def broadcast_to_all():
     failed_count = 0
     
     for chat_id in all_bot_users.keys():
-        result = send_telegram_message(chat_id, text, parse_mode=parse_mode)
+        if image_url:
+            # Отправка фото с подписью
+            result = send_broadcast_photo_to_chat(chat_id, image_url, text, parse_mode)
+        else:
+            # Отправка только текста
+            result = send_telegram_message(chat_id, text, parse_mode=parse_mode)
+        
         if result['success']:
             sent_count += 1
         else:
@@ -646,6 +653,33 @@ def broadcast_to_all():
         'failed_count': failed_count,
         'total': len(all_bot_users)
     })
+
+
+def send_broadcast_photo_to_chat(chat_id: int, image_url: str, caption: str = None, parse_mode: str = 'HTML') -> dict:
+    """Отправляет фото по URL через Telegram Bot API"""
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+    
+    try:
+        # Скачиваем изображение
+        img_response = requests.get(image_url, timeout=30)
+        if img_response.status_code != 200:
+            return {'success': False, 'error': 'Failed to download image'}
+        
+        files = {'photo': ('image.jpg', img_response.content, 'image/jpeg')}
+        data = {'chat_id': chat_id}
+        
+        if caption:
+            data['caption'] = caption
+            data['parse_mode'] = parse_mode
+        
+        response = requests.post(url, data=data, files=files, timeout=30)
+        return {
+            'success': response.status_code == 200,
+            'status_code': response.status_code,
+            'response': response.json() if response.status_code == 200 else response.text
+        }
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
 
 
 @app.route('/api/all-chat-ids', methods=['GET'])
