@@ -27,6 +27,10 @@ DJANGO_API_KEY = os.environ.get('DJANGO_API_KEY', 'your-django-api-key')  # API 
 # Формат: {phone_number: chat_id}
 chat_ids = {}
 
+# Хранилище всех chat_id для рассылок (даже без регистрации на сайте)
+# Формат: {chat_id: {'phone': str, 'first_name': str, 'username': str, 'added_at': datetime}}
+all_bot_users = {}
+
 # Временные токены для регистрации
 # Формат: {token: {'phone': str, 'chat_id': int, 'expires': datetime}}
 registration_tokens = {}
@@ -159,6 +163,14 @@ def handle_contact(chat_id: int, contact: dict):
         phone_number = '+' + phone_number
 
     chat_ids[phone_number] = chat_id
+    
+    # Сохраняем в список всех пользователей бота для рассылок
+    all_bot_users[chat_id] = {
+        'phone': phone_number,
+        'first_name': first_name,
+        'added_at': datetime.now()
+    }
+    
     sync_chat_id_to_django(phone_number, chat_id)
     
     token = generate_token()
@@ -596,6 +608,68 @@ def send_telegram_photo(chat_id: int, photo, caption: str = None, parse_mode: st
             'success': False,
             'error': str(e)
         }
+
+
+@app.route('/api/broadcast-to-all', methods=['POST'])
+def broadcast_to_all():
+    """
+    API для массовой рассылки всем пользователям бота.
+    Не требует регистрации на сайте.
+    """
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer ') or auth_header[7:] != API_SECRET:
+        return jsonify({'error': 'Unauthorized'}), 401
+    
+    data = request.get_json()
+    text = data.get('text', '')
+    parse_mode = data.get('parse_mode', 'HTML')
+    
+    if not text:
+        return jsonify({'error': 'Text is required'}), 400
+    
+    if not all_bot_users:
+        return jsonify({'error': 'No users found'}), 404
+    
+    sent_count = 0
+    failed_count = 0
+    
+    for chat_id in all_bot_users.keys():
+        result = send_telegram_message(chat_id, text, parse_mode=parse_mode)
+        if result['success']:
+            sent_count += 1
+        else:
+            failed_count += 1
+    
+    return jsonify({
+        'success': True,
+        'sent_count': sent_count,
+        'failed_count': failed_count,
+        'total': len(all_bot_users)
+    })
+
+
+@app.route('/api/all-chat-ids', methods=['GET'])
+def get_all_chat_ids():
+    """
+    API для получения всех chat_id пользователей бота.
+    """
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer ') or auth_header[7:] != API_SECRET:
+        return jsonify({'error': 'Unauthorized'}), 401
+    
+    users = []
+    for chat_id, info in all_bot_users.items():
+        users.append({
+            'chat_id': chat_id,
+            'phone': info.get('phone'),
+            'first_name': info.get('first_name')
+        })
+    
+    return jsonify({
+        'success': True,
+        'count': len(users),
+        'users': users
+    })
 
 
 def get_bot_username() -> str:
